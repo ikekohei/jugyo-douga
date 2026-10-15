@@ -295,10 +295,22 @@ const lctx = layer.getContext('2d');
 function fit(){
   const r = stage.getBoundingClientRect();
   const s = Math.min((r.width - 10) / VW, (r.height - 10) / H);
-  cv.style.width = Math.floor(VW * s) + 'px';
-  cv.style.height = Math.floor(H * s) + 'px';
-  const S = Math.max(1, Math.min(2, Math.round(VW * s * (window.devicePixelRatio || 1)) / VW));
-  const cw = Math.round(VW * S), ch = Math.round(H * S);
+  // ボードの画素数を、画面に表示される実際の画素数とぴったり同じにする。
+  // 1画素でもずれると、ブラウザがボード全体を引き伸ばし直すので、線や文字がにじんで見える
+  const dpr = window.devicePixelRatio || 1;
+  const gcd = (a, b) => b ? gcd(b, a % b) : a, g = gcd(VW, H), sw = VW / g, sh = H / g;   // 縦横比を保てる最小単位（4:3なら4×3）
+  let n = Math.floor(VW * s * dpr / sw);                          // 画面いっぱいに収まる単位の数
+  n = Math.max(Math.ceil(VW / sw), Math.min(Math.floor(2 * VW / sw), n));   // 細かさはボードの1〜2倍の範囲
+  const cw = n * sw, ch = n * sh, S = cw / VW;
+  const exact = cw <= VW * s * dpr + 0.5;                          // 画面の実際の画素とそのまま対応できるか
+  const cssW = exact ? cw / dpr : Math.floor(VW * s);
+  cv.style.width = cssW + 'px';
+  cv.style.height = (cssW * H / VW) + 'px';
+  // ボードの左上が画素の途中に来ると、それだけでにじむので、画素の境目にそろえる
+  cv.style.transform = '';
+  const b = cv.getBoundingClientRect();
+  const fx = (b.left * dpr) % 1, fy = (b.top * dpr) % 1;
+  if (fx || fy) cv.style.transform = `translate(${-fx / dpr}px, ${-fy / dpr}px)`;
   if (cw !== cv.width || ch !== cv.height){
     SCALE = S;
     cv.width = cw; cv.height = ch; layer.width = cw; layer.height = ch;
@@ -375,7 +387,9 @@ function curveThrough(c, pts, start){
 const DARK_MAP = { '#1a1a1a': '#f4f4ee', '#d62828': '#ff7b7b', '#1f5fbf': '#7db3ff', '#ffd400': '#ffe14d' };
 function ink(c){ return dark ? (DARK_MAP[c] || c) : c; }
 const BOARD_BG = () => dark ? '#1c211f' : '#ffffff';
-function widthAt(s, p){ return s.hl ? s.size : s.size * (0.35 + p.p * 1.3); }
+// ペンの太さは筆圧で変えない（一定）。iPadのPencilの筆圧は軽く揺れやすく、太さが波打ったり
+// 書き終わりが丸く膨らんだりして字が汚く見えるため。黒板やホワイトボードのマーカーと同じく一定の太さで描く
+function widthAt(s, p){ return s.hl ? s.size : s.size * 0.7; }
 function drawStroke(c, s, opaque){
   const p = s.pts; if (!p.length) return;
   c.save(); c.lineCap = 'round'; c.lineJoin = 'round'; c.strokeStyle = ink(s.color); c.fillStyle = ink(s.color);
@@ -453,6 +467,8 @@ function drawItem(c, it){
 }
 function renderItems(c, list){
   c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+  // 細かく取り込んだPDFや画像を縮めて表示するとき、文字がギザギザにならないようにきれいに縮める
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
   c.fillStyle = BOARD_BG(); c.fillRect(0, 0, W, H);
   if (grid) drawGrid(c);
   const hidden = drag ? new Set(sel) : null, hls = [];
@@ -1047,7 +1063,7 @@ function fitRect(w, h, maxW, maxH){ const s = Math.min(maxW / w, maxH / h); retu
 async function importImage(f){
   const url = URL.createObjectURL(f);
   const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
-  const s = Math.min(1, 1800 / Math.max(im.naturalWidth, im.naturalHeight));
+  const s = Math.min(1, 3000 / Math.max(im.naturalWidth, im.naturalHeight));   // 拡大しても粗くならないよう、長い辺3000ドットまで残す
   const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
   const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
   URL.revokeObjectURL(url);
@@ -1077,12 +1093,15 @@ async function importPdf(f){
     toast(`PDFを読み込み中 ${k + 1} / ${nums.length}`, 60000);
     const pg = await pdf.getPage(nums[k]);
     const v1 = pg.getViewport({ scale: 1 });
-    const scale = Math.min(VW / v1.width, H / v1.height) * 1.5;
+    // ボードに収まる大きさの3倍の細かさで画像にする（拡大しても文字がくっきり残るように）。
+    // ただし長い辺は3600ドットまで（iPadのメモリとキャンバスの上限に収める）
+    const fitScale = Math.min(VW / v1.width, H / v1.height);
+    const scale = Math.min(fitScale * 3, 3600 / Math.max(v1.width, v1.height));
     const vp = pg.getViewport({ scale });
     const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
     const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
     await pg.render({ canvasContext: g, viewport: vp }).promise;
-    const src = c.toDataURL('image/jpeg', 0.9);
+    const src = c.toDataURL('image/jpeg', 0.92);
     c.width = c.height = 0; pg.cleanup();
     const r = fitRect(vp.width, vp.height, VW, H);
     const p = newPage(); p.items.push({ type: 'image', src, x: (W - r.w) / 2, y: (H - r.h) / 2, w: r.w, h: r.h, locked: true });
