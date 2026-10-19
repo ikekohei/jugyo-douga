@@ -154,6 +154,7 @@ dialog p{font-size:14px;color:var(--muted);margin:10px 0 0;line-height:1.7}
         </select></label>
       <span id="recTime" class="hide">00:00</span>
       <button id="rewindBtn" class="hide" title="一時停止したところまで動画を戻して撮り直す"><svg viewBox="0 0 24 24"><path d="M6 5v14"/><path d="M18 5l-9 7 9 7z"/></svg>撮り直し</button>
+      <button id="checkBtn" class="hide" title="ここまで録画した内容を再生して確かめる（録画は一時停止します）"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5l5 2.5-5 2.5z" style="fill:currentColor"/></svg>確認</button>
       <button id="pauseBtn" class="hide" aria-label="一時停止" title="一時停止"><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg></button>
       <button id="recBtn"><span class="dot"></span><span id="recLabel">録画</span></button>
       <button id="fsBtn" aria-label="全画面"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
@@ -246,6 +247,17 @@ dialog p{font-size:14px;color:var(--muted);margin:10px 0 0;line-height:1.7}
   <div class="row">
     <button id="recoverDiscard">破棄する</button>
     <button id="recoverOk" class="primary">動画にする</button>
+  </div>
+</dialog>
+
+<dialog id="checkDlg">
+  <h2>ここまでの録画</h2>
+  <video id="checkVideo" controls playsinline></video>
+  <p>録画は一時停止しています。閉じたあと「再開」で続きを撮るか、「撮り直し」で直前の場面を撮り直せます。</p>
+  <div class="row">
+    <button id="checkLast10">直前10秒</button>
+    <button id="checkFromStart">最初から</button>
+    <button id="checkClose" class="primary">閉じる</button>
   </div>
 </dialog>
 
@@ -1582,6 +1594,8 @@ function setRecUI(){
   $('recTime').classList.toggle('hide', !on);
   $('pauseBtn').classList.toggle('hide', !on);
   $('rewindBtn').classList.toggle('hide', !on);
+  $('checkBtn').classList.toggle('hide', !on);
+  $('checkBtn').disabled = st === 'busy' || (st === 'paused' && !segs.length);
   $('pauseBtn').innerHTML = st === 'paused' ? PLAY_ICON + '再開' : PAUSE_ICON + '一時停止';
   $('pauseBtn').title = $('pauseBtn').ariaLabel = st === 'paused' ? '再開' : '一時停止';
   $('pauseBtn').classList.toggle('resume', st === 'paused');
@@ -1646,6 +1660,36 @@ $('rewindBtn').onclick = async () => {
     setRecUI(); tick(); toast('ひとつ前の区切りまで戻りました。「再開」で続きから撮れます', 4000);
   }
 };
+
+// 確認：ここまでの場面をつないだ動画をその場で作って再生する（録画中に押したら、まず一時停止する）
+let checkURL = null;
+async function joinSegs(blobs){
+  const type = (recMime || 'video/mp4').split(';')[0];
+  try { return await MP4F.finalize(blobs, type); }
+  catch (e1){ try { return await MP4.join(blobs, type); } catch (e2){ return blobs[blobs.length - 1]; } }
+}
+$('checkBtn').onclick = async () => {
+  if (recState === 'live'){ recState = 'busy'; setRecUI(); await finishTake(true); recState = 'paused'; setRecUI(); tick(); }
+  if (recState !== 'paused' || !segs.length){ toast('まだ確かめられる録画がありません'); return; }
+  recState = 'busy'; setRecUI(); toast('確認用の動画を作っています…', 30000);
+  const blob = await joinSegs(segs.map(s => new Blob(s.chunks, { type: recMime || 'video/mp4' })));
+  recState = 'paused'; setRecUI(); $('toast').classList.remove('show');
+  if (checkURL) URL.revokeObjectURL(checkURL);
+  checkURL = URL.createObjectURL(blob);
+  const v = $('checkVideo');
+  v.onloadedmetadata = () => { if (isFinite(v.duration)) v.currentTime = Math.max(0, v.duration - 10); v.play().catch(() => {}); };
+  v.src = checkURL;
+  $('checkDlg').showModal();
+};
+$('checkLast10').onclick = () => { const v = $('checkVideo'); if (isFinite(v.duration)) v.currentTime = Math.max(0, v.duration - 10); v.play().catch(() => {}); };
+$('checkFromStart').onclick = () => { const v = $('checkVideo'); v.currentTime = 0; v.play().catch(() => {}); };
+function closeCheck(){
+  const v = $('checkVideo'); v.pause(); v.removeAttribute('src'); v.load();
+  if (checkURL){ URL.revokeObjectURL(checkURL); checkURL = null; }
+  $('checkDlg').close();
+}
+$('checkClose').onclick = closeCheck;
+$('checkDlg').oncancel = e => { e.preventDefault(); closeCheck(); };
 
 async function startRec(){
   if (!window.MediaRecorder || !cv.captureStream){ toast('このブラウザでは録画できません。iPadOSとSafariを最新にしてください', 4000); return; }
