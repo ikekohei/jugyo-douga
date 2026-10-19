@@ -543,7 +543,7 @@ function drawOverlays(c, display){
   }
   const now = performance.now();
   if (laser.length){
-    const m = LASER_SCALE[laserKey] || 1;   // 細・中・太
+    const m = (LASER_SCALE[laserKey] || 1) / Z;   // 細・中・太（拡大中も、画面上の太さはいつもと同じ）
     c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
     for (let i = 1; i < laser.length; i++){
       const a = laser[i-1], b = laser[i]; if (b.t - a.t > 120) continue;
@@ -613,7 +613,7 @@ function redo(){ const pg = page(); if (!pg.redo.length) return; pg.undo.push(pg
 /* ---------- pointer ---------- */
 const ERASE_SIZES = { 2.5: 7, 4.5: 14, 8: 30 };
 let eraseKey = 4.5, eraseMode = 'part', hoverPt = null;
-const eraseR = () => ERASE_SIZES[eraseKey] || 14;
+const eraseR = () => (ERASE_SIZES[eraseKey] || 14) / Z;   // 拡大中も、画面上の消しゴムの大きさはいつもと同じ
 function boardAt(cx, cy){
   const r = cv.getBoundingClientRect();
   return { x: X0 + PX + (cx - r.left) * VW / (Z * r.width), y: PY + (cy - r.top) * H / (Z * r.height) };
@@ -721,8 +721,11 @@ let laserKey = 4.5;
 try { const v = +localStorage.getItem('bansho-laser'); if (LASER_SCALE[v]) laserKey = v; } catch (e){}
 let penAir = false, zeroRun = 0;   // ペンが触れたまま浮いている（筆圧0が続いている）状態
 let lastMoveKey = '';               // 直前に処理した動きの中身（同じ知らせが2回届いたときに見分ける）
+// 拡大中は、画面上で見える太さがいつもと同じになるよう、ボード上では拡大率の分だけ細く描く
+// （拡大して書いた字は、元の大きさに戻すと細く小さくなる）
 function newDrawing(pt){
-  return { type: 'stroke', color: tool === 'hl' ? hlColor : penColor, size: tool === 'hl' ? ({2.5:14,4.5:24,8:38}[size] || 24) : size, hl: tool === 'hl', pts: [pt] };
+  const base = tool === 'hl' ? ({2.5:14,4.5:24,8:38}[size] || 24) : size;
+  return { type: 'stroke', color: tool === 'hl' ? hlColor : penColor, size: base / Z, hl: tool === 'hl', pts: [pt] };
 }
 function finishDrawing(){ const s = drawing; snapshot(); page().items.push(s); drawing = null; strokeAdded(s); }
 function cancelAction(){
